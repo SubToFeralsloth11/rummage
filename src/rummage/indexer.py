@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config, db, embed
-from .extract import chunk_text, extract, in_asset_dir, kind_for
+from .extract import Extracted, chunk_text, extract, folder_listing, in_asset_dir, kind_for
 
 EMBED_BATCH = 128
 COMMIT_EVERY = 25
@@ -57,7 +57,7 @@ def name_words(path: Path) -> str:
 
 
 def walk(roots: list[config.Root]):
-    """Yield (path, stat, allow_ocr) for every indexable file under the roots."""
+    """Yield (path, stat, allow_ocr, kind) for every indexable file and folder under the roots."""
     seen: set[str] = set()
     for root in roots:
         if not os.path.isdir(root.path):
@@ -69,6 +69,12 @@ def walk(roots: list[config.Root]):
                 and d not in config.SKIP_DIRS
                 and not d.endswith(config.SKIP_DIR_SUFFIXES)
             ]
+            if dirpath not in seen:
+                seen.add(dirpath)
+                try:
+                    yield Path(dirpath), os.stat(dirpath), root.ocr, "folder"
+                except OSError:
+                    pass
             for name in files:
                 if name.startswith("."):
                     continue
@@ -87,7 +93,7 @@ def walk(roots: list[config.Root]):
                     st = p.stat()
                 except OSError:
                     continue
-                yield p, st, root.ocr
+                yield p, st, root.ocr, kind
 
 
 class Indexer:
@@ -154,35 +160,36 @@ class Indexer:
         }
         todo = []
         seen = set()
-        for p, st, allow_ocr in walk(config.load_roots()):
+        for p, st, allow_ocr, kind in walk(config.load_roots()):
             sp = str(p)
             seen.add(sp)
             pr.done = len(seen)
             prev = known.get(sp)
             if prev is None or prev[1] != st.st_mtime or prev[2] != st.st_size:
-                todo.append((p, st, allow_ocr, prev[0] if prev else None))
+                todo.append((p, st, allow_ocr, kind, prev[0] if prev else None))
         gone = [fid for path, (fid, _, _) in known.items() if path not in seen]
         for fid in gone:
             db.delete_file(conn, fid)
         pr.removed = len(gone)
         conn.commit()
-        self._note(f"scanned {len(seen)} files: {len(todo)} to read, {len(gone)} removed", verbose)
+        self._note(f"scanned {len(seen)} files and folders: {len(todo)} to read, {len(gone)} removed", verbose)
 
         pr.phase = "reading"
         pr.total = len(todo)
         pr.done = 0
-        for i, (p, st, allow_ocr, old_id) in enumerate(todo):
+        for i, (p, st, allow_ocr, kind, old_id) in enumerate(todo):
             if self._stop.is_set():
                 break
             pr.current = str(p)
             error = None
             try:
-                ex = extract(p, st.st_size, allow_ocr)
+                ex = Extracted("folder", folder_listing(p)) if kind == "folder" else extract(p, st.st_size, allow_ocr)
             except Exception as e:
                 ex = None
                 error = f"{type(e).__name__}: {e}"[:300]
                 pr.errors += 1
-            kind = ex.kind if ex else (kind_for(p) or "media")
+            if ex:
+                kind = ex.kind
             text = ex.text if ex else ""
             if old_id is not None:
                 db.delete_file(conn, old_id)
@@ -192,7 +199,7 @@ class Indexer:
             fid = conn.execute(
                 "INSERT INTO files(path, name, ext, kind, size, mtime, indexed_at, ocr, error)"
                 " VALUES(?,?,?,?,?,?,?,?,?)",
-                (str(p), p.name, p.suffix.lower().lstrip("."), kind, st.st_size, st.st_mtime,
+                (str(p), p.name, "" if kind == "folder" else p.suffix.lower().lstrip("."), kind, st.st_size, st.st_mtime,
                  time.time(), int(bool(ex and ex.ocr)), error),
             ).lastrowid
             words = name_words(p)

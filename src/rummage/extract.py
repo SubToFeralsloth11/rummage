@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 import zipfile
 from dataclasses import dataclass
@@ -27,11 +28,6 @@ NAME_ONLY_EXTS = {
     "zip", "rar", "7z", "dmg", "pkg", "mp4", "mov", "m4v", "mkv", "avi", "webm", "mp3", "m4a",
     "wav", "flac", "aac", "blend", "bbmodel", "psd", "kra", "aseprite", "fbx", "glb", "gltf",
     "key", "pages", "numbers", "epub", "apk", "jar", "exe", "iso", "mcpack", "mcworld", "svg",
-}
-
-KIND_LABELS = {
-    "text": "Note", "code": "Code", "doc": "Document", "pdf": "PDF",
-    "image": "Image", "media": "File",
 }
 
 
@@ -180,6 +176,19 @@ def extract(path: Path, size: int, allow_ocr: bool) -> Extracted | None:
             return Extracted(kind, ocr_image(str(path)), True)
         return Extracted(kind, "")
     return Extracted(kind, "")
+
+
+def folder_listing(path: Path, limit: int = 300) -> str:
+    """What's inside a folder (subfolders first), so it can be found by its contents."""
+    try:
+        entries = [e for e in os.scandir(path) if not e.name.startswith(".")]
+    except OSError:
+        return ""
+    dirs = sorted(e.name + "/" for e in entries if e.is_dir(follow_symlinks=False))
+    files = sorted(e.name for e in entries if not e.is_dir(follow_symlinks=False))
+    names = (dirs + files)[:limit]
+    more = len(dirs) + len(files) - len(names)
+    return "\n".join(names) + (f"\n… and {more} more" if more > 0 else "")
 
 
 def chunk_text(text: str) -> list[str]:

@@ -47,6 +47,8 @@ KIND_WORDS = {
     "presentation": (set(), {"pptx", "key", "odp"}, "Slides"),
     "video": (set(), {"mp4", "mov", "m4v", "mkv", "avi", "webm"}, "Videos"),
     "videos": (set(), {"mp4", "mov", "m4v", "mkv", "avi", "webm"}, "Videos"),
+    "folder": ({"folder"}, set(), "Folders"), "folders": ({"folder"}, set(), "Folders"),
+    "directory": ({"folder"}, set(), "Folders"), "directories": ({"folder"}, set(), "Folders"),
 }
 # Language words only become filters next to a "file/script/code" word: "python script".
 LANG_EXTS = {

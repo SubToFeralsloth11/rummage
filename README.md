@@ -5,6 +5,7 @@ Search everything on your Mac in plain English. Fully offline: your files, the i
 - **"that receipt from October"** finds a photo of a receipt by the text printed on it.
 - **"the code where I did pathfinding"** finds `enemy.gd`, even though the word "pathfinding" isn't in it.
 - **"pdfs from last week"**, **"screenshots yesterday"**, **"python script for scraping"**, **"notes from march 2025"**.
+- **"zombie survival folder"** finds folders too, by name or by what's in them.
 
 ## Run it
 
@@ -59,6 +60,7 @@ The index lives in `~/.rummage/` (set `RUMMAGE_HOME` to move it). Delete that fo
 | PDF | text layer, or OCR for scans |
 | Images | png, jpg, heic, webp, tiff, gif (OCR) |
 | By name only | zip, dmg, mp4, mov, mp3, blend, bbmodel, psd, glb, … |
+| Folders | name, plus the names of what's inside |
 
 Skipped: hidden folders, `node_modules`, `build`, `dist`, `venv`, git worktrees (`*-wt`), app bundles, text files over 2 MB. Very long files are indexed up to about 60,000 characters.
 
