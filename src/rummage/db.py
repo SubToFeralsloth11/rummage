@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS files(
     mtime REAL NOT NULL,
     indexed_at REAL NOT NULL,
     ocr INTEGER NOT NULL DEFAULT 0,
-    error TEXT
+    error TEXT,
+    summary TEXT  -- JSON code summary (language, functions, tags, …)
 );
 CREATE INDEX IF NOT EXISTS files_mtime ON files(mtime);
 CREATE TABLE IF NOT EXISTS chunks(
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS chunks(
     emb BLOB
 );
 CREATE INDEX IF NOT EXISTS chunks_file ON chunks(file_id);
+-- emb IS NULL = waiting to be embedded; empty blob = deliberately not embedded (keyword-only chunk).
 CREATE INDEX IF NOT EXISTS chunks_pending ON chunks(id) WHERE emb IS NULL;
 -- rowid = chunks.id. "name" holds the file name plus folder words so names are searchable.
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text, name, tokenize='porter unicode61');
@@ -42,6 +44,9 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
+    if "summary" not in cols:  # index made by an older version
+        conn.execute("ALTER TABLE files ADD COLUMN summary TEXT")
     return conn
 
 

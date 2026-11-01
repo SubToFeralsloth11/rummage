@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 import zipfile
@@ -23,11 +24,13 @@ CODE_NAMES = {"makefile", "dockerfile", "gemfile", "rakefile", "procfile", "just
 DOC_EXTS = {"docx", "pptx", "xlsx", "odt", "odp", "ods"}
 PDF_EXTS = {"pdf"}
 IMAGE_EXTS = {"png", "jpg", "jpeg", "heic", "heif", "webp", "tiff", "tif", "gif", "bmp"}
+VIDEO_EXTS = {"mp4", "mov", "m4v", "mkv", "avi", "webm"}
+AUDIO_EXTS = {"mp3", "m4a", "wav", "flac", "aac", "ogg", "opus"}
+MODEL_EXTS = {"glb", "gltf", "obj", "fbx", "stl", "ply", "dae", "blend", "bbmodel", "usdz"}
 # Indexed by name only: no text to pull out, but worth finding.
 NAME_ONLY_EXTS = {
-    "zip", "rar", "7z", "dmg", "pkg", "mp4", "mov", "m4v", "mkv", "avi", "webm", "mp3", "m4a",
-    "wav", "flac", "aac", "blend", "bbmodel", "psd", "kra", "aseprite", "fbx", "glb", "gltf",
-    "key", "pages", "numbers", "epub", "apk", "jar", "exe", "iso", "mcpack", "mcworld", "svg",
+    "zip", "rar", "7z", "dmg", "pkg", "psd", "kra", "aseprite", "key", "pages", "numbers", "epub",
+    "apk", "jar", "exe", "iso", "mcpack", "mcworld", "svg",
 }
 
 
@@ -50,6 +53,12 @@ def kind_for(path: Path) -> str | None:
         return "doc"
     if ext in IMAGE_EXTS:
         return "image"
+    if ext in VIDEO_EXTS:
+        return "video"
+    if ext in AUDIO_EXTS:
+        return "audio"
+    if ext in MODEL_EXTS:
+        return "model"
     if ext in NAME_ONLY_EXTS:
         return "media"
     return None
@@ -175,7 +184,31 @@ def extract(path: Path, size: int, allow_ocr: bool) -> Extracted | None:
 
             return Extracted(kind, ocr_image(str(path)), True)
         return Extracted(kind, "")
+    if kind == "model" and path.suffix.lower() in (".bbmodel", ".gltf") and size <= config.MAX_TEXT_BYTES * 10:
+        return Extracted(kind, _model_names(path))
     return Extracted(kind, "")
+
+
+def _model_names(path: Path) -> str:
+    """Part, bone, texture and animation names from JSON model formats (Blockbench, glTF)."""
+    from .lzutf8 import read_bbmodel_text
+
+    data = json.loads(read_bbmodel_text(path.read_text(encoding="utf-8", errors="replace")))
+    names: list[str] = []
+    for key in ("elements", "groups", "textures", "animations", "nodes", "meshes", "materials", "images"):
+        for item in data.get(key) or []:
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                names.append(item["name"])
+
+    def groups(items):
+        for it in items or []:
+            if isinstance(it, dict):
+                if isinstance(it.get("name"), str):
+                    names.append(it["name"])
+                groups(it.get("children"))
+
+    groups(data.get("outliner"))
+    return "\n".join(dict.fromkeys(names))
 
 
 def folder_listing(path: Path, limit: int = 300) -> str:

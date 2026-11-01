@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -10,7 +11,7 @@ import time
 
 import numpy as np
 
-from . import db, embed
+from . import config, db, embed
 from .query import Parsed, parse
 
 RRF_K = 20
@@ -20,7 +21,17 @@ VEC_CANDIDATES = 300
 VEC_MIN_SIM = 0.58
 VEC_REL_DROP = 0.12  # also drop anything this far below the best match
 SNIPPET_CHARS = 300
+MIN_COVERAGE = 0.5      # keyword-only hits must contain at least half the query words
+REL_SCORE_FLOOR = 0.2   # drop results scoring under 20% of the best one
 HOME = os.path.expanduser("~")
+PROJECT_MARKERS = (
+    "project.godot", ".git", "package.json", "Cargo.toml", "pyproject.toml", "go.mod",
+    "Package.swift", "pack.mcmeta", "build.gradle", "CMakeLists.txt",
+)
+PROJECT_MIN_HITS = 2   # a project needs at least this many matching files to show up
+PROJECT_HIT_FLOOR = 0.4  # each counted file must score at least 40% of the best file
+PROJECT_WEIGHT = 0.9
+PROJECT_DECAY = 0.6    # each further matching file adds less
 
 
 def _fts_term(t: str) -> str:
@@ -72,6 +83,7 @@ class Searcher:
         self._file_ids = np.zeros(0, dtype=np.int64)
         self._mat = np.zeros((0, 384), dtype=np.float32)
         self._model_loading = False
+        self._project_cache: dict[str, str] = {}
 
     def invalidate(self) -> None:
         self._dirty = True
@@ -81,7 +93,9 @@ class Searcher:
         with self._lock:
             # While indexing, invalidations arrive constantly; reload at most every 10 s.
             if self._dirty and (time.time() - self._loaded_at > 10 or not len(self._chunk_ids)):
-                rows = conn.execute("SELECT id, file_id, emb FROM chunks WHERE emb IS NOT NULL").fetchall()
+                rows = conn.execute(
+                    "SELECT id, file_id, emb FROM chunks WHERE emb IS NOT NULL AND length(emb) > 0"
+                ).fetchall()
                 if rows:
                     self._chunk_ids = np.fromiter((r[0] for r in rows), dtype=np.int64, count=len(rows))
                     self._file_ids = np.fromiter((r[1] for r in rows), dtype=np.int64, count=len(rows))
@@ -156,16 +170,16 @@ class Searcher:
         return {r[0] for r in conn.execute(sql, args)}
 
     # ---- search --------------------------------------------------------
-    def search(self, q: str, limit: int = 40, wait_for_model: bool = False) -> dict:
+    def search(self, q: str, limit: int = 40, offset: int = 0, wait_for_model: bool = False) -> dict:
         t0 = time.time()
         p = parse(q)
         conn = db.connect()
         try:
-            return self._search(conn, p, limit, wait_for_model, t0)
+            return self._search(conn, p, limit, offset, wait_for_model, t0)
         finally:
             conn.close()
 
-    def _search(self, conn, p: Parsed, limit: int, wait_for_model: bool, t0: float) -> dict:
+    def _search(self, conn, p: Parsed, limit: int, offset: int, wait_for_model: bool, t0: float) -> dict:
         eligible = self._eligible(conn, p)
         rx = _term_regex(p.terms)
         files: dict[int, dict] = {}  # file_id -> {fts_rank, vec_rank, fts_chunk, vec_chunk, sim}
@@ -220,7 +234,7 @@ class Searcher:
             ids = sorted(eligible)
             rows = conn.execute(
                 f"SELECT id FROM files WHERE id IN ({','.join('?' * len(ids))}) ORDER BY mtime DESC LIMIT ?",
-                (*ids, limit),
+                (*ids, offset + limit),
             ).fetchall() if ids else []
             for n, r in enumerate(rows):
                 files[r[0]] = {"recent_rank": n}
@@ -243,6 +257,15 @@ class Searcher:
             )
         } if chunk_ids_needed else {}
 
+        # Which query words each file contains anywhere (name, any chunk, code tags).
+        term_files: list[set[int]] = []
+        if len(p.terms) >= 2:
+            for t in p.terms:
+                term_files.append({r[0] for r in conn.execute(
+                    "SELECT DISTINCT c.file_id FROM fts JOIN chunks c ON c.id = fts.rowid WHERE fts MATCH ? LIMIT 50000",
+                    (_fts_term(t),),
+                )})
+
         scored = []
         for fid, e in files.items():
             m = meta.get(fid)
@@ -252,9 +275,13 @@ class Searcher:
             text = chunk_text.get(cid, "")
             score = 0.0
             if "fts_rank" in e:
-                hay = (m["name"] + " " + text).lower()
-                found = sum(1 for t in p.terms if re.search(r"\b" + re.escape(t), hay))
-                coverage = found / max(len(p.terms), 1)
+                if term_files:
+                    coverage = sum(fid in s for s in term_files) / len(term_files)
+                else:
+                    coverage = 1.0
+                # "petrol station game": a file that only says "game" is noise unless it also matches by meaning.
+                if coverage < MIN_COVERAGE and "vec_rank" not in e:
+                    continue
                 score += (0.3 + 0.7 * coverage) / (RRF_K + e["fts_rank"])
                 name_l = m["name"].lower()
                 if p.terms and all(t in name_l for t in p.terms):
@@ -271,12 +298,14 @@ class Searcher:
             )
             scored.append((score, fid, match, text))
         scored.sort(key=lambda x: -x[0])
+        if scored and p.text:
+            floor = scored[0][0] * REL_SCORE_FLOOR
+            scored = [s for s in scored if s[0] >= floor]
 
-        results = []
-        for score, fid, match, text in scored[:limit]:
-            m = meta[fid]
+        def row(fid: int, score: float, match: str, text: str, m=None) -> dict:
+            m = m or meta[fid]
             d = os.path.dirname(m["path"])
-            results.append({
+            return {
                 "id": fid,
                 "path": m["path"],
                 "name": m["name"],
@@ -289,16 +318,83 @@ class Searcher:
                 "snippet": make_snippet(text, rx),
                 "match": match,
                 "score": round(score, 5),
-            })
-        return self._result(p, results, t0, semantic)
+                "summary": json.loads(m["summary"]) if m["summary"] else None,
+            }
 
-    def _result(self, p: Parsed, results: list, t0: float, semantic: bool) -> dict:
+        results = [row(fid, score, match, text) for score, fid, match, text in scored]
+        if p.text and not (p.kinds or p.exts):
+            results = self._roll_up_projects(conn, results, row)
+        total = len(results)
+        if not p.text and eligible is not None:
+            total = len(eligible)  # pure filter query: everything that passes the filter
+        return self._result(p, results[offset:offset + limit], t0, semantic, total)
+
+    # ---- projects ------------------------------------------------------
+    def _project_of(self, path: str, roots: list[str]) -> str | None:
+        """Nearest folder with a project marker (project.godot, .git, …), else the top folder under its root."""
+        d = os.path.dirname(path)
+        root = max((r for r in roots if d == r or d.startswith(r + os.sep)), key=len, default=None)
+        if root is None or d == root:
+            return None
+        if d in self._project_cache:
+            return self._project_cache[d]
+        cur, found = d, None
+        while cur != root and cur.startswith(root):
+            if any(os.path.exists(os.path.join(cur, m)) for m in PROJECT_MARKERS):
+                found = cur
+                break
+            cur = os.path.dirname(cur)
+        if found is None:
+            found = os.path.join(root, os.path.relpath(d, root).split(os.sep)[0])
+        self._project_cache[d] = found
+        return found
+
+    def _roll_up_projects(self, conn, results: list[dict], row) -> list[dict]:
+        """'that petrol station game': files matching inside one project lift the project folder itself."""
+        roots = [r.path for r in config.load_roots()]
+        groups: dict[str, list[dict]] = {}
+        # Only reasonably strong matches count, so a project isn't built out of weak meaning-only noise.
+        best = max((r["score"] for r in results if r["kind"] != "folder"), default=0)
+        for r in results:
+            if r["kind"] == "folder" or r["score"] < best * PROJECT_HIT_FLOOR:
+                continue
+            proj = self._project_of(r["path"], roots)
+            if proj:
+                groups.setdefault(proj, []).append(r)
+        by_path = {r["path"]: r for r in results}
+        added = []
+        for proj, hits in groups.items():
+            if len(hits) < PROJECT_MIN_HITS:
+                continue
+            hits.sort(key=lambda h: -h["score"])
+            score = PROJECT_WEIGHT * sum(h["score"] * PROJECT_DECAY ** i for i, h in enumerate(hits[:8]))
+            summary = [{k: h[k] for k in ("id", "name", "path", "dir", "kind", "ext", "size", "mtime", "ocr", "snippet", "match", "score", "summary")}
+                       for h in hits[:6]]
+            if proj in by_path:
+                entry = by_path[proj]
+                entry["score"] = round(entry["score"] + score, 5)
+            else:
+                m = conn.execute("SELECT * FROM files WHERE path=?", (proj,)).fetchone()
+                if m is None:
+                    continue
+                entry = row(m["id"], score, "project", "", m)
+                added.append(entry)
+            entry["match"] = "project"
+            entry["hits"] = summary
+            entry["hit_count"] = len(hits)
+            entry["snippet"] = f"Matched in {len(hits)} files: " + ", ".join(h["name"] for h in hits[:6])
+        results = results + added
+        results.sort(key=lambda r: -r["score"])
+        return results
+
+    def _result(self, p: Parsed, results: list, t0: float, semantic: bool, total: int | None = None) -> dict:
         return {
             "query": p.raw,
             "terms": p.terms,
             "chips": p.chips,
             "semantic": semantic,
             "results": results,
+            "total": len(results) if total is None else total,
             "took_ms": round((time.time() - t0) * 1000, 1),
         }
 
@@ -313,6 +409,7 @@ class Searcher:
                 "id": file_id, "path": m["path"], "name": m["name"], "kind": m["kind"], "ext": m["ext"],
                 "size": m["size"], "mtime": m["mtime"], "ocr": bool(m["ocr"]), "error": m["error"],
                 "text": join_chunks([c for c in chunks if c]),
+                "summary": json.loads(m["summary"]) if m["summary"] else None,
             }
         finally:
             conn.close()

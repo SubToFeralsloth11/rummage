@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -13,16 +14,31 @@ from pathlib import Path
 import numpy as np
 
 from . import config, db, embed
+from .codesummary import search_words, summarize
 from .extract import Extracted, chunk_text, extract, folder_listing, in_asset_dir, kind_for
 
-EMBED_BATCH = 128
+EMBED_BATCH = 64
+EMBED_CHUNKS_PER_FILE = 2  # meaning-search covers the start of each file; keywords cover all of it
+EMBED_CHARS = 600          # ~170 tokens: bge-small on CPU does ~8-20 of these a second
 COMMIT_EVERY = 25
+
+
+def passage(r) -> str:
+    """Text that gets embedded for one chunk. Code's first chunk leads with its summary."""
+    head = r["name"]
+    if r["ord"] == 0 and r["summary"] and r["summary"] != "{}":
+        s = json.loads(r["summary"])
+        bits = [s.get("lang", ""), s.get("desc", ""), " ".join(s.get("tags", [])),
+                " ".join(s.get("keywords", [])), " ".join(s.get("functions", [])[:8])]
+        head += ". " + ". ".join(b for b in bits if b)
+    return f"{head}: {r['text']}"[:EMBED_CHARS]
 
 
 @dataclass
 class Progress:
     running: bool = False
     phase: str = "idle"  # scanning | reading | embedding | idle
+    activity: str = ""   # what the current item needs: ocr, code, pdf, image, folder, embedding, …
     done: int = 0
     total: int = 0
     current: str = ""
@@ -82,8 +98,9 @@ def walk(roots: list[config.Root]):
                 kind = kind_for(p)
                 if kind is None:
                     continue
-                # In no-OCR roots (code folders) images and media in asset folders are just noise.
-                if not root.ocr and kind in ("image", "media") and in_asset_dir(p):
+                # In no-OCR roots (code folders), sprites and sound effects in asset folders are noise.
+                # 3D models and videos there are kept: they're worth finding and previewing.
+                if not root.ocr and kind in ("image", "media", "audio") and in_asset_dir(p):
                     continue
                 sp = str(p)
                 if sp in seen:
@@ -153,10 +170,10 @@ class Indexer:
         return pr
 
     def _scan_and_read(self, conn: sqlite3.Connection, pr: Progress, verbose: bool) -> None:
-        pr.phase = "scanning"
+        pr.phase = pr.activity = "scanning"
         known = {
-            r["path"]: (r["id"], r["mtime"], r["size"])
-            for r in conn.execute("SELECT id, path, mtime, size FROM files")
+            r["path"]: (r["id"], r["mtime"], r["size"], r["kind"], r["summary"] is None, r["error"] is not None)
+            for r in conn.execute("SELECT id, path, mtime, size, kind, summary, error FROM files")
         }
         todo = []
         seen = set()
@@ -165,9 +182,14 @@ class Indexer:
             seen.add(sp)
             pr.done = len(seen)
             prev = known.get(sp)
-            if prev is None or prev[1] != st.st_mtime or prev[2] != st.st_size:
+            # Re-read when the file changed, when Rummage now classifies it differently,
+            # when it's code indexed before summaries existed, or when reading it failed last time.
+            if (
+                prev is None or prev[1] != st.st_mtime or prev[2] != st.st_size or prev[3] != kind
+                or (kind == "code" and prev[4] and st.st_size > 0) or prev[5]
+            ):
                 todo.append((p, st, allow_ocr, kind, prev[0] if prev else None))
-        gone = [fid for path, (fid, _, _) in known.items() if path not in seen]
+        gone = [v[0] for path, v in known.items() if path not in seen]
         for fid in gone:
             db.delete_file(conn, fid)
         pr.removed = len(gone)
@@ -181,6 +203,7 @@ class Indexer:
             if self._stop.is_set():
                 break
             pr.current = str(p)
+            pr.activity = "ocr" if allow_ocr and kind in ("image", "pdf") else kind
             error = None
             try:
                 ex = Extracted("folder", folder_listing(p)) if kind == "folder" else extract(p, st.st_size, allow_ocr)
@@ -196,16 +219,19 @@ class Indexer:
                 pr.updated += 1
             else:
                 pr.added += 1
+            summary = summarize(p, text) if kind == "code" else None
             fid = conn.execute(
-                "INSERT INTO files(path, name, ext, kind, size, mtime, indexed_at, ocr, error)"
-                " VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO files(path, name, ext, kind, size, mtime, indexed_at, ocr, error, summary)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (str(p), p.name, "" if kind == "folder" else p.suffix.lower().lstrip("."), kind, st.st_size, st.st_mtime,
-                 time.time(), int(bool(ex and ex.ocr)), error),
+                 time.time(), int(bool(ex and ex.ocr)), error, json.dumps(summary) if summary else ("{}" if kind == "code" else None)),
             ).lastrowid
-            words = name_words(p)
+            words = name_words(p) + " " + search_words(summary)
             for ord_, chunk in enumerate(chunk_text(text) or [""]):
+                # Only the first passages get meaning-embeddings; keyword search covers all of them.
+                emb = None if ord_ < EMBED_CHUNKS_PER_FILE else b""
                 cid = conn.execute(
-                    "INSERT INTO chunks(file_id, ord, text) VALUES(?,?,?)", (fid, ord_, chunk)
+                    "INSERT INTO chunks(file_id, ord, text, emb) VALUES(?,?,?,?)", (fid, ord_, chunk, emb)
                 ).lastrowid
                 conn.execute(
                     "INSERT INTO fts(rowid, text, name) VALUES(?,?,?)",
@@ -219,24 +245,28 @@ class Indexer:
         conn.commit()
 
     def _embed_pending(self, conn: sqlite3.Connection, pr: Progress, verbose: bool) -> None:
+        # Indexes from older versions queued every passage; keep only the first few per file.
+        conn.execute("UPDATE chunks SET emb=X'' WHERE emb IS NULL AND ord >= ?", (EMBED_CHUNKS_PER_FILE,))
+        conn.commit()
         total = conn.execute("SELECT COUNT(*) FROM chunks WHERE emb IS NULL").fetchone()[0]
         if not total:
             return
         pr.phase = "embedding"
+        pr.activity = "embedding"
         pr.total = total
         pr.done = 0
         pr.current = "loading AI model"
         embed.get_model()
         while not self._stop.is_set():
             rows = conn.execute(
-                "SELECT c.id, c.text, f.name FROM chunks c JOIN files f ON f.id = c.file_id"
+                "SELECT c.id, c.ord, c.text, f.name, f.summary FROM chunks c JOIN files f ON f.id = c.file_id"
                 " WHERE c.emb IS NULL LIMIT ?",
                 (EMBED_BATCH,),
             ).fetchall()
             if not rows:
                 break
             pr.current = rows[0]["name"]
-            vecs = embed.embed_passages([f"{r['name']}: {r['text']}"[:2000] for r in rows])
+            vecs = embed.embed_passages([passage(r) for r in rows])
             conn.executemany(
                 "UPDATE chunks SET emb=? WHERE id=?",
                 [(v.astype(np.float32).tobytes(), r["id"]) for v, r in zip(vecs, rows)],

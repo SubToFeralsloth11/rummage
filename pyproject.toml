@@ -13,6 +13,7 @@ dependencies = [
     "pyobjc-framework-quartz>=13.0",
     "pyobjc-framework-vision>=13.0",
     "pypdf>=6.21.4",
+    "zstandard>=0.25.0",
 ]
 
 [project.scripts]
