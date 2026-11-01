@@ -29,6 +29,8 @@ The loading sign shows a different moving symbol for each job: scanning folders,
 
 Double-click **`Rummage.command`**. The first time, it installs its dependencies and downloads a small (~70 MB) AI model. After that it runs without internet.
 
+Double-clicking again while it's running just opens the page. If Rummage's code was updated since that copy started, the launcher stops the old copy and starts the new version. Your index is kept.
+
 A browser tab opens at `http://127.0.0.1:47615`. The first index takes a while; you can search as soon as files start showing up.
 
 | Key | Action |
