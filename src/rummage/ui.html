@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rummage</title>
+<style>
+  :root {
+    --bg: #0d0f14; --panel: #151821; --panel2: #1b1f2b; --line: #262b3a; --fg: #e8ebf3;
+    --muted: #8a93a8; --dim: #5d6579; --accent: #7c9cff; --accent2: #b48cff; --ok: #4fd1a5;
+    --warn: #f5b25c; --mark: rgba(124,156,255,.28); --radius: 14px;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 50% -200px, #1d2340 0%, transparent 70%), var(--bg);
+    color: var(--fg); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  ::selection { background: var(--mark); }
+  ::-webkit-scrollbar { width: 10px; } ::-webkit-scrollbar-thumb { background: #2a3042; border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+
+  /* ---------- header / search ---------- */
+  header { padding: 22px 28px 10px; transition: padding .35s ease; }
+  body.idle header { padding-top: 22vh; }
+  .brand { display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 18px; transition: all .35s; }
+  body:not(.idle) .brand { display: none; }
+  .logo { width: 40px; height: 40px; }
+  .brand h1 { margin: 0; font-size: 30px; letter-spacing: -.5px; font-weight: 700;
+    background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip: text; color: transparent; }
+  .tagline { text-align: center; color: var(--muted); margin: -8px 0 22px; }
+  body:not(.idle) .tagline { display: none; }
+  .searchwrap { position: relative; max-width: 820px; margin: 0 auto; }
+  .searchbox {
+    display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 18px; padding: 0 18px; height: 58px; box-shadow: 0 10px 40px rgba(0,0,0,.35);
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .searchbox:focus-within { border-color: #3b4670; box-shadow: 0 0 0 4px rgba(124,156,255,.12), 0 10px 40px rgba(0,0,0,.4); }
+  .searchbox svg { flex: none; color: var(--muted); }
+  #q { flex: 1; background: none; border: 0; outline: 0; color: var(--fg); font-size: 19px; height: 100%; }
+  #q::placeholder { color: var(--dim); }
+  .kbd { font: 11px var(--mono); color: var(--dim); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+  .spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .7s linear infinite; opacity: 0; transition: opacity .15s; }
+  .loading .spinner { opacity: 1; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .meta { max-width: 820px; margin: 10px auto 0; display: flex; align-items: center; gap: 8px; min-height: 26px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); color: var(--fg); font-size: 12px; animation: pop .25s ease; }
+  .chip.date { border-color: #3a3256; } .chip.kind { border-color: #2c4255; }
+  .chip i { font-style: normal; opacity: .7; }
+  @keyframes pop { from { transform: scale(.85); opacity: 0; } }
+  .meta .sep { flex: 1; }
+  .badge-sem { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+
+  .examples { max-width: 820px; margin: 22px auto 0; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  body:not(.idle) .examples { display: none; }
+  .examples button { background: transparent; border: 1px dashed var(--line); color: var(--muted); border-radius: 999px; padding: 6px 14px; transition: all .2s; }
+  .examples button:hover { color: var(--fg); border-color: var(--accent); background: rgba(124,156,255,.06); }
+
+  /* ---------- results ---------- */
+  main { flex: 1; display: grid; grid-template-columns: minmax(380px, 1fr) minmax(360px, 1.1fr); gap: 16px; padding: 8px 28px 12px; min-height: 0; }
+  body.idle main { display: none; }
+  #results { overflow-y: auto; padding-right: 4px; min-height: 0; }
+  .res {
+    display: grid; grid-template-columns: 44px 1fr; gap: 12px; padding: 12px 14px; border-radius: var(--radius);
+    border: 1px solid transparent; cursor: pointer; animation: rise .28s ease both; position: relative;
+  }
+  .res:hover { background: rgba(255,255,255,.025); }
+  .res.sel { background: var(--panel); border-color: var(--line); }
+  .res.sel::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 3px; background: linear-gradient(var(--accent), var(--accent2)); }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .icon { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; font: 600 10.5px var(--mono); letter-spacing: .3px; text-transform: uppercase; overflow: hidden; background: var(--panel2); color: var(--muted); }
+  .icon img { width: 100%; height: 100%; object-fit: cover; }
+  .k-code { background: #17263a; color: #7cc4ff; } .k-pdf { background: #3a1a1f; color: #ff8a8a; }
+  .k-text { background: #1f2a1e; color: #9ee493; } .k-doc { background: #1a2340; color: #8fb0ff; }
+  .k-image { background: #2c1f38; color: #d39cff; } .k-media { background: #2b2618; color: #f5c66d; }
+  .title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .when { color: var(--dim); font-size: 12px; white-space: nowrap; margin-left: auto; }
+  .dir { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+  .snip { color: var(--muted); font-size: 13px; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .k-code-snip { font-family: var(--mono); font-size: 12px; }
+  mark { background: var(--mark); color: var(--fg); border-radius: 3px; padding: 0 1px; }
+  .tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+  .tag.meaning { color: var(--accent2); border-color: #3d3060; } .tag.both { color: var(--ok); border-color: #1f4b3d; }
+  .empty { color: var(--muted); text-align: center; padding: 60px 20px; }
+  .empty b { color: var(--fg); display: block; font-size: 16px; margin-bottom: 6px; }
+
+  /* ---------- preview ---------- */
+  #preview { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .pv-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+  .pv-name { font-size: 16px; font-weight: 650; word-break: break-all; }
+  .pv-path { color: var(--dim); font-size: 12px; word-break: break-all; margin-top: 2px; }
+  .pv-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+  .btn { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; font-size: 13px; transition: all .15s; }
+  .btn:hover { border-color: #3b4670; background: #20263a; }
+  .btn.primary { background: linear-gradient(90deg, #4f6fe8, #7d5ae0); border-color: transparent; color: #fff; }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .pv-info { color: var(--dim); font-size: 12px; margin-left: auto; }
+  .pv-body { flex: 1; overflow: auto; padding: 16px 18px 24px; }
+  .pv-body pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.6 var(--mono); color: #c8cede; }
+  .pv-body.prose pre { font: 14px/1.65 -apple-system, sans-serif; }
+  .pv-img { max-width: 100%; max-height: 50vh; border-radius: 10px; display: block; margin: 0 auto 16px; background: #0b0d12; }
+  .pv-note { color: var(--dim); font-size: 12px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .6px; }
+  .pv-empty { color: var(--dim); display: grid; place-items: center; height: 100%; text-align: center; padding: 30px; }
+
+  /* ---------- footer ---------- */
+  footer { display: flex; align-items: center; gap: 14px; padding: 9px 28px; border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; background: rgba(13,15,20,.8); }
+  footer .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar { width: 160px; height: 5px; border-radius: 9px; background: var(--line); overflow: hidden; display: none; }
+  .bar > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s; }
+  .indexing .bar { display: block; }
+  footer button { background: none; border: 1px solid var(--line); border-radius: 8px; padding: 3px 10px; color: var(--muted); }
+  footer button:hover { color: var(--fg); border-color: #3b4670; }
+
+  /* ---------- folders drawer ---------- */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .25s; }
+  .drawer { position: fixed; right: 0; top: 0; bottom: 0; width: min(460px, 92vw); background: var(--panel); border-left: 1px solid var(--line);
+    transform: translateX(100%); transition: transform .3s cubic-bezier(.2,.8,.2,1); padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+  body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
+  body.drawer-open .drawer { transform: none; }
+  .drawer h2 { margin: 0; font-size: 18px; }
+  .drawer p { margin: 0; color: var(--muted); font-size: 13px; }
+  .root { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; }
+  .root .p { flex: 1; min-width: 0; word-break: break-all; font-size: 13px; }
+  .root .p small { display: block; color: var(--dim); }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+  .toggle input { accent-color: var(--accent); }
+  .x { background: none; border: 0; color: var(--dim); font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+  .x:hover { color: #ff8a8a; background: rgba(255,0,0,.08); }
+  .kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .kinds div { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12px; color: var(--muted); }
+  .kinds b { display: block; color: var(--fg); font-size: 16px; }
+  .log { font: 11.5px var(--mono); color: var(--dim); white-space: pre-wrap; max-height: 120px; overflow: auto; }
+
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } #preview { display: none; } }
+</style>
+</head>
+<body class="idle">
+<header>
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 40 40" fill="none">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#7c9cff"/><stop offset="1" stop-color="#b48cff"/></linearGradient></defs>
+      <rect x="3" y="7" width="22" height="27" rx="4" stroke="url(#g)" stroke-width="2.4"/>
+      <path d="M8 14h12M8 19h9M8 24h6" stroke="url(#g)" stroke-width="2.2" stroke-linecap="round"/>
+      <circle cx="27" cy="24" r="7" fill="#0d0f14" stroke="url(#g)" stroke-width="2.6"/>
+      <path d="M32 29l5 5" stroke="url(#g)" stroke-width="3" stroke-linecap="round"/>
+    </svg>
+    <h1>Rummage</h1>
+  </div>
+  <p class="tagline">Search everything on your Mac in plain English. Nothing leaves this computer.</p>
+  <div class="searchwrap">
+    <div class="searchbox">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="q" autocomplete="off" spellcheck="false" autofocus>
+      <div class="spinner"></div>
+      <span class="kbd">⌘K</span>
+    </div>
+  </div>
+  <div class="meta" id="meta"></div>
+  <div class="examples" id="examples"></div>
+</header>
+
+<main>
+  <div id="results"></div>
+  <section id="preview"><div class="pv-empty">Pick a result to preview it here</div></section>
+</main>
+
+<footer id="footer">
+  <span class="grow" id="status">Loading…</span>
+  <div class="bar"><div id="barfill"></div></div>
+  <button id="reindex" title="Scan folders for new and changed files">Re-index</button>
+  <button id="folders">Folders</button>
+</footer>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer">
+  <div style="display:flex;align-items:center;gap:10px"><h2 style="flex:1">Folders</h2><button class="x" id="close">×</button></div>
+  <p>Rummage searches these folders. <b>Read images</b> runs on-device text recognition on screenshots, photos and scanned PDFs, so you can find a receipt by what's written on it. Turn it off for code folders full of game art.</p>
+  <div id="roots"></div>
+  <button class="btn primary" id="addroot">+ Add folder…</button>
+  <div class="kinds" id="kinds"></div>
+  <div class="log" id="log"></div>
+</aside>
+
+<script>
+const $ = s => document.querySelector(s);
+const q = $("#q"), resultsEl = $("#results"), previewEl = $("#preview"), metaEl = $("#meta");
+const EXAMPLES = [
+  "that receipt from October", "the code where I did pathfinding", "screenshots from last week",
+  "pdfs about school", "python script for scraping", "notes about my game ideas", "invoice 2025",
+];
+let results = [], sel = -1, terms = [], ctrl = null, timer = null, lastQ = null, previewToken = 0;
+
+// ---------- helpers ----------
+const esc = s => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function highlight(text, ts) {
+  const safe = esc(text);
+  if (!ts.length) return safe;
+  const rx = new RegExp("\\b(" + ts.map(t => esc(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).sort((a, b) => b.length - a.length).join("|") + ")", "gi");
+  return safe.replace(rx, "<mark>$1</mark>");
+}
+function ago(ts) {
+  const d = new Date(ts * 1000), s = (Date.now() - d) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  if (s < 86400 * 7) return Math.floor(s / 86400) + "d ago";
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+}
+function size(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+const post = (url, body = {}) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json());
+
+// ---------- placeholder typewriter ----------
+let exI = 0;
+function cyclePlaceholder() { q.placeholder = "Try “" + EXAMPLES[exI++ % EXAMPLES.length] + "”"; }
+cyclePlaceholder(); setInterval(cyclePlaceholder, 3500);
+$("#examples").innerHTML = EXAMPLES.slice(0, 5).map(e => `<button>${esc(e)}</button>`).join("");
+$("#examples").onclick = e => { if (e.target.tagName === "BUTTON") { q.value = e.target.textContent; runSearch(); q.focus(); } };
+
+// ---------- search ----------
+q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(runSearch, 140); });
+async function runSearch() {
+  const text = q.value.trim();
+  if (text === lastQ) return;
+  lastQ = text;
+  if (!text) { document.body.classList.add("idle"); results = []; metaEl.innerHTML = ""; return; }
+  document.body.classList.remove("idle");
+  if (ctrl) ctrl.abort();
+  ctrl = new AbortController();
+  document.body.classList.add("loading");
+  try {
+    const r = await fetch("/api/search?q=" + encodeURIComponent(text), { signal: ctrl.signal }).then(r => r.json());
+    render(r);
+  } catch (e) { if (e.name !== "AbortError") console.error(e); }
+  finally { document.body.classList.remove("loading"); }
+}
+
+function render(r) {
+  results = r.results || []; terms = r.terms || [];
+  const chips = (r.chips || []).map(c => `<span class="chip ${c.type}"><i>${c.type === "date" ? "📅" : "🗂"}</i>${esc(c.label)}</span>`).join("");
+  metaEl.innerHTML = chips + `<span class="sep"></span>`
+    + `<span>${results.length} result${results.length === 1 ? "" : "s"} · ${r.took_ms ?? 0} ms</span>`
+    + `<span class="badge-sem" title="Meaning search finds files by what they're about, not just exact words"><span class="dot ${r.semantic ? "on" : ""}"></span>${r.semantic ? "meaning + keywords" : "keywords only (AI model loading)"}</span>`;
+  if (!results.length) {
+    resultsEl.innerHTML = `<div class="empty"><b>Nothing found</b>Try fewer words, or check Folders to add where the file lives.</div>`;
+    previewEl.innerHTML = `<div class="pv-empty">No results</div>`;
+    sel = -1; return;
+  }
+  resultsEl.innerHTML = results.map((x, i) => {
+    const icon = x.kind === "image"
+      ? `<div class="icon k-image"><img loading="lazy" src="/api/thumb?id=${x.id}" onerror="this.replaceWith(document.createTextNode('${esc(x.ext)}'))"></div>`
+      : `<div class="icon k-${x.kind}">${esc((x.ext || x.kind).slice(0, 4))}</div>`;
+    const tag = x.match === "meaning" ? `<span class="tag meaning" title="Matched by meaning">≈ meaning</span>`
+      : x.match === "both" ? `<span class="tag both" title="Matched words and meaning">● strong</span>` : "";
+    return `<div class="res" data-i="${i}" style="animation-delay:${Math.min(i, 12) * 18}ms">
+      ${icon}
+      <div style="min-width:0">
+        <div class="title"><span class="name">${highlight(x.name, terms)}</span>${tag}<span class="when">${ago(x.mtime)}</span></div>
+        <div class="dir">&lrm;${esc(x.dir)}</div>
+        ${x.snippet ? `<div class="snip ${x.kind === "code" ? "k-code-snip" : ""}">${highlight(x.snippet, terms)}</div>` : ""}
+      </div></div>`;
+  }).join("");
+  select(0, false);
+}
+
+resultsEl.addEventListener("click", e => { const el = e.target.closest(".res"); if (el) select(+el.dataset.i); });
+resultsEl.addEventListener("dblclick", e => { const el = e.target.closest(".res"); if (el) openFile(results[+el.dataset.i].id); });
+
+function select(i, scroll = true) {
+  if (!results.length) return;
+  sel = Math.max(0, Math.min(results.length - 1, i));
+  resultsEl.querySelectorAll(".res").forEach((el, j) => el.classList.toggle("sel", j === sel));
+  const el = resultsEl.querySelector(`.res[data-i="${sel}"]`);
+  if (scroll && el) el.scrollIntoView({ block: "nearest" });
+  showPreview(results[sel]);
+}
+
+async function showPreview(x) {
+  const token = ++previewToken;
+  const info = `${x.kind}${x.ext ? " · ." + x.ext : ""} · ${size(x.size)} · ${new Date(x.mtime * 1000).toLocaleString()}`;
+  previewEl.innerHTML = `<div class="pv-head">
+      <div class="pv-name">${esc(x.name)}</div><div class="pv-path">${esc(x.path)}</div>
+      <div class="pv-actions">
+        <button class="btn primary" data-act="open">Open</button>
+        <button class="btn" data-act="reveal">Show in Finder</button>
+        <button class="btn" data-act="copy">Copy path</button>
+        <span class="pv-info">${esc(info)}</span>
+      </div></div><div class="pv-body"><div class="pv-empty">Loading…</div></div>`;
+  previewEl.querySelector(".pv-actions").onclick = e => {
+    const act = e.target.dataset.act;
+    if (act === "open") openFile(x.id);
+    if (act === "reveal") openFile(x.id, true);
+    if (act === "copy") { navigator.clipboard.writeText(x.path); e.target.textContent = "Copied ✓"; setTimeout(() => e.target.textContent = "Copy path", 1200); }
+  };
+  const pv = await fetch("/api/preview?id=" + x.id).then(r => r.json()).catch(() => null);
+  if (token !== previewToken || !pv) return;
+  const body = previewEl.querySelector(".pv-body");
+  body.classList.toggle("prose", x.kind === "text" || x.kind === "doc" || x.kind === "pdf" || x.kind === "image");
+  let html = "";
+  if (x.kind === "image") html += `<img class="pv-img" src="/api/thumb?id=${x.id}" onerror="this.remove()">`;
+  if (pv.text) {
+    if (pv.ocr) html += `<p class="pv-note">Text read from ${x.kind === "image" ? "image" : "scanned pages"}</p>`;
+    html += `<pre>${highlight(pv.text.slice(0, 200000), terms)}</pre>`;
+  } else if (pv.error) {
+    html += `<div class="pv-empty">Couldn't read this file: ${esc(pv.error)}</div>`;
+  } else if (x.kind !== "image") {
+    html += `<div class="pv-empty">No text inside. Found by its name.</div>`;
+  }
+  body.innerHTML = html;
+  const m = body.querySelector("mark");
+  if (m) body.scrollTop = Math.max(0, m.offsetTop - body.offsetTop - 80);
+}
+
+function openFile(id, reveal = false) { post("/api/open", { id, reveal }); }
+
+// ---------- keyboard ----------
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); q.focus(); q.select(); return; }
+  if (e.key === "Escape") {
+    if (document.body.classList.contains("drawer-open")) return toggleDrawer(false);
+    q.value = ""; runSearch(); q.focus(); return;
+  }
+  if (document.body.classList.contains("drawer-open") || !results.length) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); select(sel + 1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); select(sel - 1); }
+  else if (e.key === "Enter" && sel >= 0) { e.preventDefault(); openFile(results[sel].id, e.metaKey || e.ctrlKey); }
+});
+
+// ---------- status + folders ----------
+const PHASE = { scanning: "Scanning folders", reading: "Reading files", embedding: "Teaching the AI what your files mean" };
+let wasRunning = false, statusTimer = null;
+async function refreshStatus() {
+  clearTimeout(statusTimer);
+  let s;
+  try { s = await fetch("/api/status").then(r => r.json()); }
+  catch { $("#status").textContent = "Rummage isn't running. Start it again from Rummage.command."; statusTimer = setTimeout(refreshStatus, 5000); return; }
+  const ix = s.indexing, foot = $("#footer");
+  foot.classList.toggle("indexing", ix.running);
+  const base = `${s.files.toLocaleString()} files indexed · ${s.embedded.toLocaleString()}/${s.chunks.toLocaleString()} passages understood`;
+  if (ix.running) {
+    const pct = ix.total ? Math.round(100 * ix.done / ix.total) : 0;
+    $("#barfill").style.width = (ix.phase === "scanning" ? 8 : pct) + "%";
+    const cur = ix.current ? " · " + ix.current.split("/").pop() : "";
+    $("#status").textContent = `${PHASE[ix.phase] || ix.phase}${ix.total ? ` ${ix.done.toLocaleString()}/${ix.total.toLocaleString()}` : ix.done ? ` (${ix.done.toLocaleString()} found)` : ""}${cur}`;
+  } else {
+    $("#status").textContent = base + (ix.finished ? ` · updated ${ago(ix.finished)}` : "");
+  }
+  if (wasRunning && !ix.running && lastQ) { const t = lastQ; lastQ = null; q.value = t; runSearch(); }
+  wasRunning = ix.running;
+  renderRoots(s);
+  statusTimer = setTimeout(refreshStatus, ix.running ? 1000 : 5000);
+}
+
+function renderRoots(s) {
+  $("#roots").innerHTML = s.roots.map(r => `<div class="root">
+      <div class="p">${esc(r.path.replace(/^\/Users\/[^/]+/, "~"))}${r.exists ? "" : "<small>missing</small>"}</div>
+      <label class="toggle"><input type="checkbox" data-ocr="${esc(r.path)}" ${r.ocr ? "checked" : ""}>Read images</label>
+      <button class="x" data-rm="${esc(r.path)}" title="Stop searching this folder">×</button></div>`).join("")
+    || `<p>No folders yet. Add one.</p>`;
+  const k = s.kinds || {}, names = { code: "Code", text: "Notes", pdf: "PDFs", doc: "Documents", image: "Images", media: "Other" };
+  $("#kinds").innerHTML = Object.entries(names).map(([key, n]) => `<div><b>${(k[key] || 0).toLocaleString()}</b>${n}</div>`).join("");
+  $("#log").textContent = (s.indexing.log || []).join("\n");
+}
+$("#roots").addEventListener("click", async e => {
+  if (e.target.dataset.rm && confirm("Stop searching " + e.target.dataset.rm + "? Its files are removed from the index (nothing is deleted from disk).")) {
+    renderRoots(await post("/api/roots/remove", { path: e.target.dataset.rm }));
+  }
+});
+$("#roots").addEventListener("change", e => { if (e.target.dataset.ocr) post("/api/roots/ocr", { path: e.target.dataset.ocr, ocr: e.target.checked }); });
+$("#addroot").onclick = async () => { const s = await post("/api/roots/pick", { ocr: true }); if (!s.cancelled) { renderRoots(s); refreshStatus(); } };
+function toggleDrawer(open) { document.body.classList.toggle("drawer-open", open); }
+$("#folders").onclick = () => toggleDrawer(true);
+$("#close").onclick = $("#scrim").onclick = () => toggleDrawer(false);
+$("#reindex").onclick = async () => { await post("/api/index"); refreshStatus(); };
+refreshStatus();
+</script>
+</body>
+</html>

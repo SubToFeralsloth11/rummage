@@ -1,0 +1,23 @@
+[project]
+name = "rummage"
+version = "0.1.0"
+description = "Offline personal search engine: find anything on your Mac in plain English"
+readme = "README.md"
+authors = [
+    { name = "John Grimes", email = "tgrim43@eq.edu.au" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastembed>=0.9.1",
+    "numpy>=2.5.4",
+    "pyobjc-framework-quartz>=13.0",
+    "pyobjc-framework-vision>=13.0",
+    "pypdf>=6.21.4",
+]
+
+[project.scripts]
+rummage = "rummage:main"
+
+[build-system]
+requires = ["uv_build>=0.12.24,<0.13.0"]
+build-backend = "uv_build"
