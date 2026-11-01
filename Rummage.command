@@ -1,8 +1,8 @@
 #!/bin/bash
 # Double-click to start Rummage. Close this window (or press Ctrl+C) to quit.
 cd "$(dirname "$0")" || exit 1
-PORT=8765
-if curl -s -o /dev/null "http://127.0.0.1:$PORT/api/status"; then
+PORT=47615
+if curl -s -D - -o /dev/null "http://127.0.0.1:$PORT/api/status" | grep -qi "^server: Rummage"; then
   echo "Rummage is already running. Opening it..."
   open "http://127.0.0.1:$PORT/"
   exit 0

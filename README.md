@@ -10,7 +10,7 @@ Search everything on your Mac in plain English. Fully offline: your files, the i
 
 Double-click **`Rummage.command`**. The first time, it installs its dependencies and downloads a small (~70 MB) AI model. After that it runs without internet.
 
-A browser tab opens at `http://127.0.0.1:8765`. The first index takes a while; you can search as soon as files start showing up.
+A browser tab opens at `http://127.0.0.1:47615`. The first index takes a while; you can search as soon as files start showing up.
 
 | Key | Action |
 | --- | --- |

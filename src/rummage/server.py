@@ -182,7 +182,7 @@ def _rescan_loop():
         indexer.start_background()
 
 
-def serve(port: int = 8765, open_browser: bool = True, index_on_start: bool = True) -> None:
+def serve(port: int = 47615, open_browser: bool = True, index_on_start: bool = True) -> None:
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"Rummage running at {url}  (Ctrl+C to quit)", flush=True)

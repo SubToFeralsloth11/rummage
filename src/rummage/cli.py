@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="rummage", description="Offline search for everything on your Mac.")
     sub = ap.add_subparsers(dest="cmd")
     s = sub.add_parser("serve", help="open the search app (default)")
-    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--port", type=int, default=47615)
     s.add_argument("--no-browser", action="store_true")
     s.add_argument("--no-index", action="store_true", help="don't rescan on start")
     s.set_defaults(fn=_cmd_serve)
